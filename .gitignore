@@ -1,0 +1,23 @@
+# Dependencies and build output
+node_modules/
+dist/
+coverage/
+*.zip
+
+# Terraform
+**/.terraform/*
+.terraform.lock.hcl
+*.tfstate
+*.tfstate.*
+*.tfvars
+!example.tfvars
+crash.log
+override.tf
+override.tf.json
+
+# Environment
+.env
+.env.local
+
+# OS
+.DS_Store

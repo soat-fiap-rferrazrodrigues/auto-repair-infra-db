@@ -1,0 +1,87 @@
+name: CI/CD - Database Infrastructure
+
+on:
+  push:
+    branches: [main, homolog]
+    paths: ['terraform/db/**']
+  pull_request:
+    branches: [main, homolog]
+    paths: ['terraform/db/**']
+
+permissions:
+  contents: read
+  pull-requests: write
+  id-token: write
+
+env:
+  AWS_REGION: us-east-1
+
+jobs:
+  plan:
+    name: Validate & Plan
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: terraform/db
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hashicorp/setup-terraform@v3
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - run: terraform fmt -check -recursive
+      - run: terraform init -backend-config="key=db/homolog/terraform.tfstate"
+      - run: terraform validate
+      # Guardrail: fail the PR if the plan would destroy the database.
+      - name: Plan and block destructive changes
+        run: |
+          terraform plan -var="environment=homolog" -out=tfplan -no-color
+          if terraform show -json tfplan | grep -q '"actions":\["delete"\].*aws_db_instance'; then
+            echo "::error::Plan would destroy the RDS instance. Manual review required."
+            exit 1
+          fi
+
+  apply-homolog:
+    name: Apply Homolog
+    needs: plan
+    if: github.ref == 'refs/heads/homolog' && github.event_name == 'push'
+    runs-on: ubuntu-latest
+    environment: homolog
+    defaults:
+      run:
+        working-directory: terraform/db
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hashicorp/setup-terraform@v3
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+      - run: |
+          terraform init -backend-config="key=db/homolog/terraform.tfstate"
+          terraform apply -auto-approve -var="environment=homolog"
+
+  apply-prod:
+    name: Apply Production
+    needs: plan
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    runs-on: ubuntu-latest
+    environment: production
+    defaults:
+      run:
+        working-directory: terraform/db
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hashicorp/setup-terraform@v3
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+      - run: |
+          terraform init -backend-config="key=db/prod/terraform.tfstate"
+          terraform apply -auto-approve \
+            -var="environment=prod" \
+            -var="multi_az=true" \
+            -var="db_instance_class=db.t3.small"
